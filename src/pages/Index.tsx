@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -17,9 +17,58 @@ interface Weapon {
   icon: string;
 }
 
+interface Player {
+  x: number;
+  y: number;
+  health: number;
+  angle: number;
+}
+
+interface Enemy {
+  id: string;
+  x: number;
+  y: number;
+  health: number;
+  team: 'red' | 'blue';
+}
+
+interface CapturePoint {
+  id: string;
+  x: number;
+  y: number;
+  progress: number;
+  team: 'neutral' | 'red' | 'blue';
+}
+
+interface Bullet {
+  id: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+}
+
 const Index = () => {
   const [selectedWeapon, setSelectedWeapon] = useState<string | null>(null);
-  const [gameMode, setGameMode] = useState<'menu' | 'loadout' | 'upgrade'>('menu');
+  const [gameMode, setGameMode] = useState<'menu' | 'loadout' | 'upgrade' | 'game'>('menu');
+  
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const [player, setPlayer] = useState<Player>({ x: 100, y: 300, health: 100, angle: 0 });
+  const [enemies, setEnemies] = useState<Enemy[]>([
+    { id: '1', x: 700, y: 200, health: 100, team: 'red' },
+    { id: '2', x: 650, y: 400, health: 100, team: 'red' },
+    { id: '3', x: 750, y: 300, health: 100, team: 'red' },
+  ]);
+  const [bullets, setBullets] = useState<Bullet[]>([]);
+  const [capturePoints, setCapturePoints] = useState<CapturePoint[]>([
+    { id: 'A', x: 300, y: 300, progress: 0, team: 'neutral' },
+    { id: 'B', x: 500, y: 300, progress: 0, team: 'neutral' },
+    { id: 'C', x: 700, y: 300, progress: 0, team: 'neutral' },
+  ]);
+  const [score, setScore] = useState({ blue: 0, red: 0 });
+  const [kills, setKills] = useState(0);
+  const keysPressed = useRef<Set<string>>(new Set());
+  const mousePos = useRef({ x: 0, y: 0 });
 
   const [weapons, setWeapons] = useState<Weapon[]>([
     {
@@ -82,6 +131,291 @@ const Index = () => {
     }));
   };
 
+  useEffect(() => {
+    if (gameMode !== 'game') return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      keysPressed.current.add(e.key.toLowerCase());
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      keysPressed.current.delete(e.key.toLowerCase());
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (canvasRef.current) {
+        const rect = canvasRef.current.getBoundingClientRect();
+        mousePos.current = {
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top,
+        };
+      }
+    };
+
+    const handleClick = () => {
+      const angle = Math.atan2(
+        mousePos.current.y - player.y,
+        mousePos.current.x - player.x
+      );
+      
+      const newBullet: Bullet = {
+        id: Date.now().toString(),
+        x: player.x,
+        y: player.y,
+        vx: Math.cos(angle) * 10,
+        vy: Math.sin(angle) * 10,
+      };
+      
+      setBullets(prev => [...prev, newBullet]);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('click', handleClick);
+
+    const gameLoop = setInterval(() => {
+      setPlayer(prev => {
+        let newX = prev.x;
+        let newY = prev.y;
+        const speed = 3;
+
+        if (keysPressed.current.has('w')) newY -= speed;
+        if (keysPressed.current.has('s')) newY += speed;
+        if (keysPressed.current.has('a')) newX -= speed;
+        if (keysPressed.current.has('d')) newX += speed;
+
+        newX = Math.max(20, Math.min(780, newX));
+        newY = Math.max(20, Math.min(580, newY));
+
+        const angle = Math.atan2(
+          mousePos.current.y - newY,
+          mousePos.current.x - newX
+        );
+
+        return { ...prev, x: newX, y: newY, angle };
+      });
+
+      setBullets(prev => {
+        return prev
+          .map(bullet => ({
+            ...bullet,
+            x: bullet.x + bullet.vx,
+            y: bullet.y + bullet.vy,
+          }))
+          .filter(bullet => 
+            bullet.x > 0 && bullet.x < 800 && 
+            bullet.y > 0 && bullet.y < 600
+          );
+      });
+
+      setEnemies(prev => {
+        return prev.map(enemy => {
+          const toPlayerX = player.x - enemy.x;
+          const toPlayerY = player.y - enemy.y;
+          const dist = Math.sqrt(toPlayerX * toPlayerX + toPlayerY * toPlayerY);
+          
+          if (dist > 50) {
+            const speed = 1;
+            return {
+              ...enemy,
+              x: enemy.x + (toPlayerX / dist) * speed,
+              y: enemy.y + (toPlayerY / dist) * speed,
+            };
+          }
+          return enemy;
+        });
+      });
+
+      setBullets(prevBullets => {
+        const remainingBullets = [...prevBullets];
+        
+        setEnemies(prevEnemies => {
+          return prevEnemies.map(enemy => {
+            for (let i = remainingBullets.length - 1; i >= 0; i--) {
+              const bullet = remainingBullets[i];
+              const dx = bullet.x - enemy.x;
+              const dy = bullet.y - enemy.y;
+              const dist = Math.sqrt(dx * dx + dy * dy);
+              
+              if (dist < 20) {
+                remainingBullets.splice(i, 1);
+                const newHealth = enemy.health - 25;
+                
+                if (newHealth <= 0) {
+                  setKills(k => k + 1);
+                  setScore(s => ({ ...s, blue: s.blue + 10 }));
+                  return { ...enemy, health: 0 };
+                }
+                
+                return { ...enemy, health: newHealth };
+              }
+            }
+            return enemy;
+          }).filter(e => e.health > 0);
+        });
+
+        return remainingBullets;
+      });
+
+      setCapturePoints(prev => {
+        return prev.map(point => {
+          const dx = player.x - point.x;
+          const dy = player.y - point.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          
+          if (dist < 50) {
+            const newProgress = Math.min(point.progress + 2, 100);
+            if (newProgress === 100 && point.team !== 'blue') {
+              setScore(s => ({ ...s, blue: s.blue + 50 }));
+              return { ...point, progress: 100, team: 'blue' };
+            }
+            return { ...point, progress: newProgress };
+          }
+          
+          return point;
+        });
+      });
+    }, 1000 / 60);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('click', handleClick);
+      clearInterval(gameLoop);
+    };
+  }, [gameMode, player.x, player.y]);
+
+  const startGame = () => {
+    if (!selectedWeapon) return;
+    setGameMode('game');
+    setPlayer({ x: 100, y: 300, health: 100, angle: 0 });
+    setEnemies([
+      { id: '1', x: 700, y: 200, health: 100, team: 'red' },
+      { id: '2', x: 650, y: 400, health: 100, team: 'red' },
+      { id: '3', x: 750, y: 300, health: 100, team: 'red' },
+    ]);
+    setBullets([]);
+    setScore({ blue: 0, red: 0 });
+    setKills(0);
+  };
+
+  if (gameMode === 'game') {
+    return (
+      <div className="min-h-screen bg-dark-bg flex items-center justify-center p-4">
+        <div className="w-full max-w-6xl">
+          <div className="flex justify-between items-center mb-4">
+            <div className="flex gap-4">
+              <div className="bg-neon-cyan/20 border-2 border-neon-cyan px-6 py-2 rounded">
+                <p className="text-neon-cyan font-black text-xl">BLUE: {score.blue}</p>
+              </div>
+              <div className="bg-neon-magenta/20 border-2 border-neon-magenta px-6 py-2 rounded">
+                <p className="text-neon-magenta font-black text-xl">RED: {score.red}</p>
+              </div>
+            </div>
+            
+            <div className="flex gap-4 items-center">
+              <div className="bg-neon-yellow/20 border-2 border-neon-yellow px-6 py-2 rounded">
+                <p className="text-neon-yellow font-black text-xl">KILLS: {kills}</p>
+              </div>
+              <Button
+                onClick={() => setGameMode('menu')}
+                variant="outline"
+                className="border-neon-cyan text-neon-cyan hover:bg-neon-cyan/20"
+              >
+                EXIT
+              </Button>
+            </div>
+          </div>
+
+          <div className="bg-neon-cyan/20 border-2 border-neon-cyan px-4 py-2 rounded mb-4">
+            <p className="text-white font-bold text-center">
+              WASD - движение | Мышь - прицел | Клик - выстрел | Захватывай точки A, B, C
+            </p>
+          </div>
+
+          <div 
+            ref={canvasRef}
+            className="relative bg-gradient-to-br from-purple-950 via-dark-bg to-purple-900 border-4 border-neon-cyan rounded-lg overflow-hidden"
+            style={{ width: '800px', height: '600px', margin: '0 auto', cursor: 'crosshair' }}
+          >
+            <div className="absolute inset-0 bg-[linear-gradient(to_right,#00FFFF08_1px,transparent_1px),linear-gradient(to_bottom,#00FFFF08_1px,transparent_1px)] bg-[size:2rem_2rem]"></div>
+
+            {capturePoints.map(point => (
+              <div
+                key={point.id}
+                className="absolute"
+                style={{
+                  left: point.x - 40,
+                  top: point.y - 40,
+                  width: '80px',
+                  height: '80px',
+                }}
+              >
+                <div className={`w-full h-full rounded-full border-4 ${
+                  point.team === 'blue' ? 'border-neon-cyan bg-neon-cyan/30' :
+                  point.team === 'red' ? 'border-neon-magenta bg-neon-magenta/30' :
+                  'border-white/50 bg-white/10'
+                } flex items-center justify-center`}>
+                  <p className="text-2xl font-black text-white">{point.id}</p>
+                </div>
+                {point.progress > 0 && point.progress < 100 && (
+                  <div className="absolute -bottom-4 left-0 right-0">
+                    <Progress value={point.progress} className="h-2" />
+                  </div>
+                )}
+              </div>
+            ))}
+
+            <div
+              className="absolute w-8 h-8 bg-neon-cyan rounded-full border-4 border-white transition-all"
+              style={{
+                left: player.x - 16,
+                top: player.y - 16,
+                transform: `rotate(${player.angle}rad)`,
+              }}
+            >
+              <div className="absolute w-6 h-2 bg-white" style={{ left: '20px', top: '12px' }}></div>
+            </div>
+
+            <div className="absolute top-2 left-2 bg-dark-bg/80 border-2 border-neon-cyan px-3 py-1 rounded">
+              <Progress value={player.health} className="w-32 h-2 mb-1" />
+              <p className="text-xs text-neon-cyan font-bold text-center">HP: {player.health}</p>
+            </div>
+
+            {enemies.map(enemy => (
+              <div
+                key={enemy.id}
+                className="absolute w-8 h-8 bg-neon-magenta rounded-full border-4 border-red-500"
+                style={{
+                  left: enemy.x - 16,
+                  top: enemy.y - 16,
+                }}
+              >
+                <div className="absolute -top-6 left-1/2 -translate-x-1/2 w-16">
+                  <Progress value={enemy.health} className="h-1" />
+                </div>
+              </div>
+            ))}
+
+            {bullets.map(bullet => (
+              <div
+                key={bullet.id}
+                className="absolute w-2 h-2 bg-neon-yellow rounded-full"
+                style={{
+                  left: bullet.x - 1,
+                  top: bullet.y - 1,
+                  boxShadow: '0 0 10px #E7B000',
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (gameMode === 'menu') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-dark-bg via-purple-950 to-dark-bg relative overflow-hidden">
@@ -115,7 +449,7 @@ const Index = () => {
               className="h-16 text-xl font-bold bg-transparent hover:bg-neon-magenta/20 text-neon-magenta border-2 border-neon-magenta neon-border transition-all duration-300 hover:scale-105"
             >
               <Icon name="Settings" className="mr-3" size={28} />
-              WEAPON LOADOUT
+              WEAPON ARSENAL
             </Button>
 
             <Button
@@ -167,105 +501,73 @@ const Index = () => {
               <span className="text-neon-cyan neon-glow">ARSENAL</span>
             </h2>
 
-            <Tabs defaultValue="all" className="w-full">
-              <TabsList className="grid w-full max-w-2xl mx-auto grid-cols-4 mb-12 bg-dark-bg/50 border-2 border-neon-cyan/30">
-                <TabsTrigger value="all" className="data-[state=active]:bg-neon-cyan data-[state=active]:text-dark-bg font-bold">
-                  ALL
-                </TabsTrigger>
-                <TabsTrigger value="assault" className="data-[state=active]:bg-neon-cyan data-[state=active]:text-dark-bg font-bold">
-                  ASSAULT
-                </TabsTrigger>
-                <TabsTrigger value="sniper" className="data-[state=active]:bg-neon-magenta data-[state=active]:text-white font-bold">
-                  SNIPER
-                </TabsTrigger>
-                <TabsTrigger value="smg" className="data-[state=active]:bg-neon-yellow data-[state=active]:text-dark-bg font-bold">
-                  SMG
-                </TabsTrigger>
-              </TabsList>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {weapons.map((weapon) => (
+                <Card
+                  key={weapon.id}
+                  className="bg-dark-bg/80 border-2 border-neon-cyan/50 hover:border-neon-cyan p-6 transition-all duration-300 hover:scale-105 cursor-pointer"
+                  onClick={() => setSelectedWeapon(weapon.id)}
+                >
+                  <div className="flex items-start justify-between mb-4">
+                    <div>
+                      <h3 className="text-2xl font-black text-neon-cyan neon-glow mb-1">
+                        {weapon.name}
+                      </h3>
+                      <p className="text-neon-magenta font-bold">{weapon.type}</p>
+                    </div>
+                    <div className="bg-neon-cyan/20 p-4 rounded-lg border-2 border-neon-cyan">
+                      <Icon name={weapon.icon as any} className="text-neon-cyan" size={32} />
+                    </div>
+                  </div>
 
-              <TabsContent value="all" className="mt-0">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {weapons.map((weapon) => (
-                    <Card
-                      key={weapon.id}
-                      className="bg-dark-bg/80 border-2 border-neon-cyan/50 hover:border-neon-cyan p-6 transition-all duration-300 hover:scale-105 cursor-pointer"
-                      onClick={() => setSelectedWeapon(weapon.id)}
+                  <div className="space-y-3 mb-4">
+                    <div>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span className="text-white font-bold">DAMAGE</span>
+                        <span className="text-neon-cyan font-bold">{weapon.damage}%</span>
+                      </div>
+                      <Progress value={weapon.damage} className="h-2 bg-dark-bg border border-neon-cyan/30" />
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span className="text-white font-bold">FIRE RATE</span>
+                        <span className="text-neon-magenta font-bold">{weapon.fireRate}%</span>
+                      </div>
+                      <Progress value={weapon.fireRate} className="h-2 bg-dark-bg border border-neon-magenta/30" />
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span className="text-white font-bold">ACCURACY</span>
+                        <span className="text-neon-yellow font-bold">{weapon.accuracy}%</span>
+                      </div>
+                      <Progress value={weapon.accuracy} className="h-2 bg-dark-bg border border-neon-yellow/30" />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-4 border-t-2 border-neon-cyan/30">
+                    <div>
+                      <p className="text-xs text-gray-400 font-bold">LEVEL</p>
+                      <p className="text-xl font-black text-white">
+                        {weapon.level} / {weapon.maxLevel}
+                      </p>
+                    </div>
+                    <Button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        upgradeWeapon(weapon.id);
+                      }}
+                      disabled={weapon.level >= weapon.maxLevel}
+                      className="bg-gradient-to-r from-neon-magenta to-pink-500 hover:from-pink-500 hover:to-neon-magenta text-white font-black border-2 border-neon-magenta disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      <div className="flex items-start justify-between mb-4">
-                        <div>
-                          <h3 className="text-2xl font-black text-neon-cyan neon-glow mb-1">
-                            {weapon.name}
-                          </h3>
-                          <p className="text-neon-magenta font-bold">{weapon.type}</p>
-                        </div>
-                        <div className="bg-neon-cyan/20 p-4 rounded-lg border-2 border-neon-cyan">
-                          <Icon name={weapon.icon as any} className="text-neon-cyan" size={32} />
-                        </div>
-                      </div>
-
-                      <div className="space-y-3 mb-4">
-                        <div>
-                          <div className="flex justify-between text-sm mb-1">
-                            <span className="text-white font-bold">DAMAGE</span>
-                            <span className="text-neon-cyan font-bold">{weapon.damage}%</span>
-                          </div>
-                          <Progress value={weapon.damage} className="h-2 bg-dark-bg border border-neon-cyan/30" />
-                        </div>
-
-                        <div>
-                          <div className="flex justify-between text-sm mb-1">
-                            <span className="text-white font-bold">FIRE RATE</span>
-                            <span className="text-neon-magenta font-bold">{weapon.fireRate}%</span>
-                          </div>
-                          <Progress value={weapon.fireRate} className="h-2 bg-dark-bg border border-neon-magenta/30" />
-                        </div>
-
-                        <div>
-                          <div className="flex justify-between text-sm mb-1">
-                            <span className="text-white font-bold">ACCURACY</span>
-                            <span className="text-neon-yellow font-bold">{weapon.accuracy}%</span>
-                          </div>
-                          <Progress value={weapon.accuracy} className="h-2 bg-dark-bg border border-neon-yellow/30" />
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between pt-4 border-t-2 border-neon-cyan/30">
-                        <div>
-                          <p className="text-xs text-gray-400 font-bold">LEVEL</p>
-                          <p className="text-xl font-black text-white">
-                            {weapon.level} / {weapon.maxLevel}
-                          </p>
-                        </div>
-                        <Button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            upgradeWeapon(weapon.id);
-                          }}
-                          disabled={weapon.level >= weapon.maxLevel}
-                          className="bg-gradient-to-r from-neon-magenta to-pink-500 hover:from-pink-500 hover:to-neon-magenta text-white font-black border-2 border-neon-magenta disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <Icon name="TrendingUp" className="mr-2" size={18} />
-                          UPGRADE
-                        </Button>
-                      </div>
-                    </Card>
-                  ))}
-                </div>
-              </TabsContent>
-
-              <TabsContent value="assault">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {weapons.filter(w => w.type === 'Assault').map((weapon) => (
-                    <Card
-                      key={weapon.id}
-                      className="bg-dark-bg/80 border-2 border-neon-cyan/50 hover:border-neon-cyan p-6 transition-all duration-300 hover:scale-105"
-                    >
-                      <h3 className="text-2xl font-black text-neon-cyan">{weapon.name}</h3>
-                    </Card>
-                  ))}
-                </div>
-              </TabsContent>
-            </Tabs>
+                      <Icon name="TrendingUp" className="mr-2" size={18} />
+                      UPGRADE
+                    </Button>
+                  </div>
+                </Card>
+              ))}
+            </div>
           </div>
         </div>
       </div>
@@ -314,7 +616,7 @@ const Index = () => {
           </div>
 
           <Button
-            onClick={() => setGameMode('menu')}
+            onClick={startGame}
             disabled={!selectedWeapon}
             className="h-16 px-12 text-2xl font-black bg-gradient-to-r from-neon-magenta to-pink-500 hover:from-pink-500 hover:to-neon-magenta text-white neon-border border-2 border-neon-magenta disabled:opacity-50"
           >
